@@ -12,6 +12,7 @@ import {
   ratingFromInt,
   type Rating1to4,
 } from "@/lib/srs";
+import { overridesFor } from "@/lib/question-overrides";
 import type { Answer, RefType, Story } from "@/lib/db/schema";
 
 export async function addToDeck(refType: RefType, refId: string): Promise<void> {
@@ -137,8 +138,15 @@ export async function getSessionCards(
     .filter((c) => c.refType === "question")
     .map((c) => c.refId);
 
-  const [storyRows, questionRows, categories, linkRows, answerRows, allStories] =
-    await Promise.all([
+  const [
+    storyRows,
+    questionRows,
+    categories,
+    linkRows,
+    answerRows,
+    allStories,
+    overrides,
+  ] = await Promise.all([
       storyIds.length
         ? db
             .select()
@@ -180,6 +188,7 @@ export async function getSessionCards(
             )
         : Promise.resolve([]),
       db.select().from(schema.stories).where(eq(schema.stories.userId, userId)),
+      overridesFor(userId),
     ]);
 
   const storyById = new Map(allStories.map((s: Story) => [s.id, s]));
@@ -238,7 +247,7 @@ export async function getSessionCards(
         intervals,
         front: {
           kicker: catById.get(q.categoryId) ?? "Question",
-          title: q.text,
+          title: overrides.get(q.id)?.text ?? q.text,
           prompt: "Answer out loud — which story, what angle, what's the headline?",
         },
         back: {

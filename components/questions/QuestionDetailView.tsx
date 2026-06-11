@@ -4,8 +4,22 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, BookOpen, Save, Star, Trash2, X } from "lucide-react";
-import { deleteQuestion, type QuestionDetail } from "@/lib/actions/questions";
+import {
+  ArrowLeft,
+  BookOpen,
+  Pencil,
+  RotateCcw,
+  Save,
+  Star,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
+  deleteQuestion,
+  resetQuestion,
+  updateQuestion,
+  type QuestionDetail,
+} from "@/lib/actions/questions";
 import { saveAnswer } from "@/lib/actions/answers";
 import { linkStoryToQuestion, unlink, updateLink } from "@/lib/actions/links";
 import { IMPORTANCE_LABELS } from "@/lib/db/schema";
@@ -13,6 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DeckToggle } from "@/components/DeckToggle";
 
@@ -27,11 +42,40 @@ export function QuestionDetailView({
   allStories: StoryOption[];
   inDeck: boolean;
 }) {
-  const { question, category, target, answer, links, isMine } = detail;
+  const { question, category, target, answer, links, isMine, isEdited } = detail;
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [answerBody, setAnswerBody] = useState(answer?.body ?? "");
   const [search, setSearch] = useState("");
+
+  // Question-editing state
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(question.text);
+  const [notes, setNotes] = useState(question.notes);
+  const [importance, setImportance] = useState(question.importance);
+
+  function saveQuestion() {
+    if (!text.trim()) return;
+    startTransition(async () => {
+      await updateQuestion(question.id, {
+        text: text.trim(),
+        notes: notes.trim(),
+        importance,
+      });
+      toast.success("Question updated");
+      setEditing(false);
+      router.refresh();
+    });
+  }
+
+  function revertQuestion() {
+    startTransition(async () => {
+      await resetQuestion(question.id);
+      toast.success("Reverted to the original");
+      setEditing(false);
+      router.refresh();
+    });
+  }
 
   const linkedIds = useMemo(() => new Set(links.map((l) => l.storyId)), [links]);
   const candidates = useMemo(() => {
@@ -94,26 +138,99 @@ export function QuestionDetailView({
             </Badge>
           )}
           {isMine && <Badge variant="ghost">yours</Badge>}
+          {isEdited && <Badge variant="ghost">edited</Badge>}
         </div>
-        <h1 className="font-heading text-xl font-semibold leading-snug">
-          {question.text}
-        </h1>
-        {question.notes && (
-          <p className="text-sm text-muted-foreground">{question.notes}</p>
+
+        {editing ? (
+          <div className="space-y-3 rounded-lg border border-border p-3">
+            <div className="space-y-1.5">
+              <Label>Question</Label>
+              <Textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={2}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Prep notes</Label>
+              <Textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="How to frame it, where you've been asked it, what to lead with…"
+                rows={2}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Importance</Label>
+              <select
+                value={importance}
+                onChange={(e) => setImportance(Number(e.target.value))}
+                className="h-8 w-44 rounded-lg border border-input bg-transparent px-2 text-sm outline-none dark:bg-input/30"
+              >
+                <option value={3}>Must-have</option>
+                <option value={2}>Common</option>
+                <option value={1}>Occasional</option>
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" onClick={saveQuestion} disabled={isPending || !text.trim()}>
+                <Save data-icon="inline-start" /> Save
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setText(question.text);
+                  setNotes(question.notes);
+                  setImportance(question.importance);
+                  setEditing(false);
+                }}
+                disabled={isPending}
+              >
+                Cancel
+              </Button>
+              {!isMine && isEdited && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto"
+                  onClick={revertQuestion}
+                  disabled={isPending}
+                >
+                  <RotateCcw data-icon="inline-start" /> Reset to original
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <h1 className="font-heading text-xl font-semibold leading-snug">
+              {question.text}
+            </h1>
+            {question.notes && (
+              <p className="text-sm text-muted-foreground">{question.notes}</p>
+            )}
+          </>
         )}
-        <div className="flex items-center gap-2 pt-1">
-          <DeckToggle refType="question" refId={question.id} inDeck={inDeck} />
-          {isMine && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={confirmDelete}
-              disabled={isPending}
-            >
-              <Trash2 data-icon="inline-start" /> Delete
+
+        {!editing && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <DeckToggle refType="question" refId={question.id} inDeck={inDeck} />
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+              <Pencil data-icon="inline-start" /> Edit
             </Button>
-          )}
-        </div>
+            {isMine && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={confirmDelete}
+                disabled={isPending}
+              >
+                <Trash2 data-icon="inline-start" /> Delete
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Written answer */}

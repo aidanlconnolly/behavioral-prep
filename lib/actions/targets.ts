@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAuth } from "@/lib/auth";
 import { db, schema } from "@/lib/db/client";
+import { applyOverride, overridesFor } from "@/lib/question-overrides";
 import type { Answer, Question, Target, TargetKind } from "@/lib/db/schema";
 
 export type TargetWithCounts = Target & {
@@ -100,7 +101,9 @@ export async function getTarget(id: string): Promise<TargetDetail | null> {
           isNull(schema.questions.userId),
         ),
       );
+    const overrides = await overridesFor(userId);
     templateQuestions = templates
+      .map((q) => applyOverride(q, overrides.get(q.id)))
       .sort((a, b) => b.importance - a.importance)
       .map((q) => ({
         ...q,

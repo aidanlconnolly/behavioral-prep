@@ -76,6 +76,28 @@ export const questions = sqliteTable(
   ],
 );
 
+/**
+ * Per-user edits overlaid on a question — the way seeded (global) questions
+ * become editable without touching the shared row. Keyed by the SAME
+ * questionId, so existing links / answers / cards stay valid; a null column
+ * falls back to the question's own value. Not touched by the seed script, so
+ * edits survive reseeds. Deleting the row reverts to the original.
+ */
+export const questionOverrides = sqliteTable(
+  "question_overrides",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    questionId: text("question_id").notNull(),
+    text: text("text"),
+    notes: text("notes"),
+    importance: integer("importance"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("qoverride_user_question_idx").on(t.userId, t.questionId)],
+);
+
 /* ── Targets: the companies & industries you're recruiting for ──────────── */
 
 export const targets = sqliteTable(
@@ -204,6 +226,7 @@ export const practiceLog = sqliteTable(
 export type User = typeof users.$inferSelect;
 export type Category = typeof categories.$inferSelect;
 export type Question = typeof questions.$inferSelect;
+export type QuestionOverride = typeof questionOverrides.$inferSelect;
 export type Target = typeof targets.$inferSelect;
 export type Answer = typeof answers.$inferSelect;
 export type Story = typeof stories.$inferSelect;

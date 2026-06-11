@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAuth } from "@/lib/auth";
 import { db, schema } from "@/lib/db/client";
+import { applyOverride, overridesFor } from "@/lib/question-overrides";
 import type {
   Answer,
   Category,
@@ -53,7 +54,7 @@ export async function listQuestionsWithMeta(): Promise<{
   questions: QuestionWithMeta[];
 }> {
   const userId = await requireAuth();
-  const [categories, questions, links, stories, answers, targets] =
+  const [categories, rawQuestions, links, stories, answers, targets, overrides] =
     await Promise.all([
       listCategories(),
       visibleQuestions(userId),
@@ -73,7 +74,9 @@ export async function listQuestionsWithMeta(): Promise<{
         .select()
         .from(schema.targets)
         .where(eq(schema.targets.userId, userId)),
+      overridesFor(userId),
     ]);
+  const questions = rawQuestions.map((q) => applyOverride(q, overrides.get(q.id)));
 
   const catById = new Map(categories.map((c) => [c.id, c]));
   const storyById = new Map(stories.map((s: Story) => [s.id, s]));
@@ -135,6 +138,8 @@ export type QuestionDetail = {
   answer: Answer | null;
   links: (StoryQuestionLink & { story: Story })[];
   isMine: boolean;
+  /** Seeded question that this user has edited (has an override row). */
+  isEdited: boolean;
 };
 
 export async function getQuestion(id: string): Promise<QuestionDetail | null> {
@@ -150,7 +155,9 @@ export async function getQuestion(id: string): Promise<QuestionDetail | null> {
     )
     .limit(1);
   if (rows.length === 0) return null;
-  const question = rows[0];
+  const overrides = await overridesFor(userId);
+  const override = overrides.get(rows[0].id);
+  const question = applyOverride(rows[0], override);
 
   const [categories, linkRows, answerRows, targetRows] = await Promise.all([
     db
@@ -205,6 +212,7 @@ export async function getQuestion(id: string): Promise<QuestionDetail | null> {
     answer: answerRows[0] ?? null,
     links: linkRows.map((r) => ({ ...r.link, story: r.story })),
     isMine: question.userId === userId,
+    isEdited: question.userId === null && override !== undefined,
   };
 }
 
@@ -243,11 +251,69 @@ export async function updateQuestion(
   }>,
 ): Promise<void> {
   const userId = await requireAuth();
-  // Only user-created questions are editable; seeded rows stay immutable.
+  const rows = await db
+    .select()
+    .from(schema.questions)
+    .where(eq(schema.questions.id, id))
+    .limit(1);
+  if (rows.length === 0) return;
+  const q = rows[0];
+  const now = Date.now();
+
+  if (q.userId === userId) {
+    // User-owned question: edit the row directly.
+    await db
+      .update(schema.questions)
+      .set(patch)
+      .where(and(eq(schema.questions.id, id), eq(schema.questions.userId, userId)));
+  } else if (q.userId === null) {
+    // Seeded (shared) question: store the edit as a per-user override so the
+    // global row is untouched and existing links/answers stay valid.
+    const existing = await db
+      .select({ id: schema.questionOverrides.id })
+      .from(schema.questionOverrides)
+      .where(
+        and(
+          eq(schema.questionOverrides.userId, userId),
+          eq(schema.questionOverrides.questionId, id),
+        ),
+      )
+      .limit(1);
+    const fields = {
+      text: patch.text ?? null,
+      notes: patch.notes ?? null,
+      importance: patch.importance ?? null,
+    };
+    if (existing.length > 0) {
+      await db
+        .update(schema.questionOverrides)
+        .set({ ...fields, updatedAt: now })
+        .where(eq(schema.questionOverrides.id, existing[0].id));
+    } else {
+      await db.insert(schema.questionOverrides).values({
+        id: nanoid(),
+        userId,
+        questionId: id,
+        ...fields,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+  revalidatePath("/", "layout");
+}
+
+/** Revert a seeded question to its original text by dropping the user's edit. */
+export async function resetQuestion(id: string): Promise<void> {
+  const userId = await requireAuth();
   await db
-    .update(schema.questions)
-    .set(patch)
-    .where(and(eq(schema.questions.id, id), eq(schema.questions.userId, userId)));
+    .delete(schema.questionOverrides)
+    .where(
+      and(
+        eq(schema.questionOverrides.userId, userId),
+        eq(schema.questionOverrides.questionId, id),
+      ),
+    );
   revalidatePath("/", "layout");
 }
 
